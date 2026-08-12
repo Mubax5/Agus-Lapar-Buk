@@ -99,6 +99,12 @@ function getSidebarServerSnapshot() { return false; }
 function subscribeToOrganization(callback: () => void) { window.addEventListener(ORGANIZATION_CHANGE_EVENT, callback); return () => window.removeEventListener(ORGANIZATION_CHANGE_EVENT, callback); }
 function getOrganizationSnapshot() { return window.localStorage.getItem("gateguard.organization") || ""; }
 function getOrganizationServerSnapshot() { return ""; }
+export function isStoredOrganizationValid(
+  organizationId: string,
+  organizations: Array<Record<string, unknown>>,
+): boolean {
+  return !organizationId || organizations.some((organization) => String(organization.id) === organizationId);
+}
 function canSee(role: UserRole, minimum: string) { const levels = { operator: 1, supervisor: 2, admin: 3 }; return levels[role] >= (levels[minimum as UserRole] || 1); }
 function activeLabel(pathname: string, language: AppLanguage) { for (const group of groups) { const match = group.items.find(([href]) => pathname === href || pathname.startsWith(`${href}/`)); if (match) return localized(language, match[1]); } return translate(language, "overview"); }
 
@@ -128,6 +134,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const resultCount = navResults.length + remoteResults.length;
 
   useEffect(() => { document.documentElement.lang = language; }, [language]);
+
+  useEffect(() => {
+    const items = organizations.data?.items || [];
+    if (selectedOrganizationId && !isStoredOrganizationValid(selectedOrganizationId, items)) {
+      window.localStorage.removeItem("gateguard.organization");
+      window.dispatchEvent(new Event(ORGANIZATION_CHANGE_EVENT));
+      client.invalidateQueries();
+    }
+  }, [client, organizations.data?.items, selectedOrganizationId]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

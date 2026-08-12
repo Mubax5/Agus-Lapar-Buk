@@ -10,12 +10,28 @@ import { fetchOperationsList } from "@/lib/api";
 
 type Column = { label: string; value: (row: Record<string, unknown>) => React.ReactNode };
 
+export function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function displayValue(value: unknown, fallback = "—"): string {
+  return value === null || value === undefined || value === "" ? fallback : String(value);
+}
+
+export function formatTimestamp(value: unknown): string {
+  if (!value) return "—";
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-GB");
+}
+
 const configs: Record<string, { title: string; description: string; path: string; columns: Column[]; action?: { href: string; label: string } }> = {
   documents: { title: "Documents", description: "Keep shipment evidence versioned, reviewable, and connected to its case.", path: "/documents", columns: [
     { label: "Document", value: (row) => <strong>{String(row.document_type)}</strong> },
     { label: "Shipment", value: (row) => String(row.shipment_reference) },
-    { label: "Version", value: (row) => row.version ? `v${String((row.version as Record<string, unknown>).version)}` : "—" },
-    { label: "Extraction", value: (row) => row.version ? String((row.version as Record<string, unknown>).extraction_status) : "Pending" },
+    { label: "Version", value: (row) => { const version = asRecord(row.version); return version.version ? `v${displayValue(version.version)}` : "—"; } },
+    { label: "Extraction", value: (row) => { const version = asRecord(row.version); return displayValue(version.extraction_status, "Pending"); } },
     { label: "Status", value: (row) => <span className="table-status">{String(row.status)}</span> },
   ] },
   parties: { title: "Parties", description: "Maintain the trading parties involved in shipment cases.", path: "/parties", columns: [
@@ -37,14 +53,14 @@ const configs: Record<string, { title: string; description: string; path: string
     { label: "Carrier", value: (row) => String(row.carrier || "—") },
     { label: "Origin", value: (row) => String(row.origin || "—") },
     { label: "Destination", value: (row) => String(row.destination || "—") },
-    { label: "Planned arrival", value: (row) => row.planned_arrival ? new Date(String(row.planned_arrival)).toLocaleString("en-GB") : "—" },
+    { label: "Planned arrival", value: (row) => formatTimestamp(row.planned_arrival) },
   ] },
   requirements: { title: "Requirements", description: "Understand which evidence is expected for each shipment and why.", path: "/requirements", columns: [
-    { label: "Requirement", value: (row) => <strong>{String((row.requirement as Record<string, unknown>).name)}</strong> },
-    { label: "Shipment", value: (row) => String(row.shipment_reference) },
-    { label: "Document type", value: (row) => String((row.requirement as Record<string, unknown>).document_type) },
-    { label: "Result", value: (row) => <span className="table-status">{String((row.evaluation as Record<string, unknown>).result)}</span> },
-    { label: "Reason", value: (row) => String((row.evaluation as Record<string, unknown>).reason) },
+    { label: "Requirement", value: (row) => <strong>{displayValue(asRecord(row.requirement).name)}</strong> },
+    { label: "Shipment", value: (row) => displayValue(row.shipment_reference) },
+    { label: "Document type", value: (row) => displayValue(asRecord(row.requirement).document_type) },
+    { label: "Result", value: (row) => <span className="table-status">{displayValue(asRecord(row.evaluation).result)}</span> },
+    { label: "Reason", value: (row) => displayValue(asRecord(row.evaluation).reason) },
   ] },
   assurance: { title: "Assurance checks", description: "Review checks across shipment cases, with evidence and the rule version that produced them.", path: "/assurance", columns: [
     { label: "Shipment", value: (row) => <strong>{String(row.shipment_reference)}</strong> },
@@ -52,49 +68,49 @@ const configs: Record<string, { title: string; description: string; path: string
     { label: "Status", value: (row) => <span className="table-status">{String(row.status)}</span> },
     { label: "Severity", value: (row) => String(row.severity) },
     { label: "Source", value: (row) => String(row.source) },
-    { label: "Completed", value: (row) => row.completed_at ? new Date(String(row.completed_at)).toLocaleString("en-GB") : "—" },
+    { label: "Completed", value: (row) => formatTimestamp(row.completed_at) },
   ] },
   exceptions: { title: "Exceptions", description: "Resolve the issues that keep a shipment from moving forward.", path: "/exceptions", columns: [
     { label: "Severity", value: (row) => <span className="table-status">{String(row.severity)}</span> },
     { label: "Shipment", value: (row) => <strong>{String(row.shipment_reference)}</strong> },
     { label: "Exception", value: (row) => String(row.summary) },
     { label: "Assignee", value: (row) => String(row.assigned_to || "Unassigned") },
-    { label: "Due", value: (row) => row.due_at ? new Date(String(row.due_at)).toLocaleString("en-GB") : "—" },
+    { label: "Due", value: (row) => formatTimestamp(row.due_at) },
     { label: "Status", value: (row) => String(row.status) },
   ] },
   releases: { title: "Release decisions", description: "Review the immutable decisions that authorize, hold, or invalidate dispatch.", path: "/releases", columns: [
     { label: "Shipment", value: (row) => <strong>{String(row.shipment_reference)}</strong> },
     { label: "Decision", value: (row) => String(row.decision) },
     { label: "Issued by", value: (row) => String(row.issued_by_name) },
-    { label: "Issued", value: (row) => new Date(String(row.created_at)).toLocaleString("en-GB") },
+    { label: "Issued", value: (row) => formatTimestamp(row.created_at) },
     { label: "Reason", value: (row) => String(row.reason) },
   ] },
   screening: { title: "Party screening", description: "Keep screening honest: configured providers report results; unconfigured providers do not claim coverage.", path: "/screening", columns: [
     { label: "Party", value: (row) => <strong>{String(row.party)}</strong> },
     { label: "Shipment", value: (row) => String(row.shipment_reference) },
-    { label: "Provider", value: (row) => String((row.run as Record<string, unknown>).provider) },
-    { label: "Result", value: (row) => String((row.run as Record<string, unknown>).result) },
-    { label: "Score", value: (row) => String((row.run as Record<string, unknown>).score ?? "—") },
+    { label: "Provider", value: (row) => displayValue(asRecord(row.run).provider) },
+    { label: "Result", value: (row) => displayValue(asRecord(row.run).result) },
+    { label: "Score", value: (row) => displayValue(asRecord(row.run).score) },
   ] },
   "dangerous-goods": { title: "Dangerous goods", description: "Review items that need complete dangerous-goods information before release.", path: "/dangerous-goods", columns: [
     { label: "Shipment", value: (row) => <strong>{String(row.shipment_reference)}</strong> },
-    { label: "Item", value: (row) => String((row.item as Record<string, unknown>).description) },
-    { label: "UN number", value: (row) => String((row.item as Record<string, unknown>).un_number || "Missing") },
-    { label: "Hazard class", value: (row) => String((row.item as Record<string, unknown>).hazard_class || "Missing") },
+    { label: "Item", value: (row) => displayValue(asRecord(row.item).description) },
+    { label: "UN number", value: (row) => displayValue(asRecord(row.item).un_number, "Missing") },
+    { label: "Hazard class", value: (row) => displayValue(asRecord(row.item).hazard_class, "Missing") },
     { label: "Assurance", value: (row) => String(row.assurance) },
   ] },
   connections: { title: "Connections", description: "See the systems configured to exchange shipment information with this workspace.", path: "/integrations/connections", columns: [
     { label: "Name", value: (row) => <strong>{String(row.name)}</strong> },
     { label: "Type", value: (row) => String(row.type) },
     { label: "Status", value: (row) => String(row.status) },
-    { label: "Last success", value: (row) => row.last_success_at ? new Date(String(row.last_success_at)).toLocaleString("en-GB") : "—" },
-    { label: "Last error", value: (row) => row.last_error_at ? new Date(String(row.last_error_at)).toLocaleString("en-GB") : "—" },
+    { label: "Last success", value: (row) => formatTimestamp(row.last_success_at) },
+    { label: "Last error", value: (row) => formatTimestamp(row.last_error_at) },
   ] },
   jobs: { title: "Processing jobs", description: "Track bounded extraction, assessment, and delivery work without hiding failures.", path: "/integrations/jobs", columns: [
     { label: "Job", value: (row) => <strong>{String(row.job_type)}</strong> },
     { label: "Status", value: (row) => String(row.status) },
     { label: "Attempts", value: (row) => String(row.attempts) },
-    { label: "Queued", value: (row) => new Date(String(row.queued_at)).toLocaleString("en-GB") },
+    { label: "Queued", value: (row) => formatTimestamp(row.queued_at) },
     { label: "Error", value: (row) => String(row.safe_error || "—") },
   ] },
 };
