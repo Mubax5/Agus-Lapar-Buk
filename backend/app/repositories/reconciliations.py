@@ -17,6 +17,7 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    update,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -400,6 +401,11 @@ class ReconciliationRepository:
             user.password_hash = password_hash
             user.must_change_password = False
             user.updated_at = now
+            session.execute(
+                update(SessionRow)
+                .where(SessionRow.user_id == user_id, SessionRow.revoked_at.is_(None))
+                .values(revoked_at=now)
+            )
             session.commit()
             session.refresh(user)
             return user

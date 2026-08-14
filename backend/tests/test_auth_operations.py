@@ -141,3 +141,23 @@ def test_workspace_membership_role_controls_authorization():
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_password_change_revokes_all_active_sessions(tmp_path):
+    repository = ReconciliationRepository(f"sqlite:///{tmp_path / 'password-revocation.db'}")
+    user = repository.create_user(
+        email="password-revocation@example.com",
+        display_name="Password Revocation",
+        password_hash=hash_password("a secure password"),
+        role="operator",
+    )
+    first_token = create_session(repository, user.id, get_settings())
+    second_token = create_session(repository, user.id, get_settings())
+
+    assert repository.get_session_user(session_hash(first_token)) is not None
+    assert repository.get_session_user(session_hash(second_token)) is not None
+
+    repository.change_password(user.id, hash_password("an even more secure password"))
+
+    assert repository.get_session_user(session_hash(first_token)) is None
+    assert repository.get_session_user(session_hash(second_token)) is None

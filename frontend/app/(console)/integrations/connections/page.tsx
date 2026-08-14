@@ -10,7 +10,7 @@ import { DataTableSurface, EmptyState } from "@/components/ui/page-primitives";
 import { ContextRail, KeyValueList, OperationalState, RailSection, StateNotice } from "@/components/ui/operational-primitives";
 import { PageHeader } from "@/components/ui/page-header";
 import { AppSelect } from "@/components/ui/select";
-import { createConnection, createServiceAccount, fetchOperationsList } from "@/lib/api";
+import { createConnection, createServiceAccount, fetchMe, fetchOperationsList } from "@/lib/api";
 
 type Connection = { id: string; name: string; type: string; status: string; configuration?: Record<string, unknown>; last_success_at?: string | null; last_error_at?: string | null; created_at?: string; updated_at?: string };
 const dateTime = (value?: string | null) => value ? new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "Belum ada";
@@ -18,7 +18,9 @@ function health(connection: Connection) { if (connection.last_error_at) return "
 
 export default function ConnectionsPage() {
   const client = useQueryClient();
-  const result = useQuery({ queryKey: ["connections"], queryFn: () => fetchOperationsList("/integrations/connections") });
+  const session = useQuery({ queryKey: ["auth", "me"], queryFn: fetchMe });
+  const canManageConnections = session.data?.role === "admin";
+  const result = useQuery({ queryKey: ["connections"], queryFn: () => fetchOperationsList("/integrations/connections"), enabled: canManageConnections });
   const [form, setForm] = useState({ name: "", type: "ERP", configuration: "{}" });
   const [accountName, setAccountName] = useState("");
   const [token, setToken] = useState("");
@@ -32,6 +34,7 @@ export default function ConnectionsPage() {
 
   return <div className="operations-page cf-connections-page">
     <PageHeader icon={Connections} title="Connections" description="Sistem bisnis dan partner service yang dikonfigurasi pada workspace aktif. Credential tidak pernah tampil pada register ini." />
+    {!session.isPending && !canManageConnections ? <StateNotice title="Koneksi hanya tersedia untuk administrator." tone="warning">Operator tidak dapat melihat atau mengubah konfigurasi integrasi maupun membuat service token.</StateNotice> : <>
     {result.error ? <StateNotice title="Connections tidak dapat dimuat" tone="danger">{result.error instanceof Error ? result.error.message : "Coba muat ulang konfigurasi integrasi."}</StateNotice> : null}
     <div className="cf-integration-layout">
       <DataTableSurface title="Sistem terkonfigurasi" description={`${items.length} connection dalam workspace ini. Health hanya dihitung dari status dan timestamp yang tercatat.`} actions={<Button size="sm" variant="secondary" icon={Plus} onClick={() => document.getElementById("add-connection")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Tambah</Button>}>
@@ -45,5 +48,6 @@ export default function ConnectionsPage() {
       <form className="form-panel" onSubmit={(event) => { event.preventDefault(); connection.mutate(); }}><div className="form-panel__heading"><h2>Tambahkan connection</h2><p>Connection baru dibuat dalam state DISABLED sampai konfigurasi operasional diselesaikan.</p></div><div className="form-grid"><Input label="Nama" required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Sistem gudang" /><label>Provider / type<AppSelect ariaLabel="Tipe connection" value={form.type} onValueChange={(type) => setForm({ ...form, type })} options={[{ value: "ERP", label: "ERP" }, { value: "WMS", label: "WMS" }, { value: "Carrier", label: "Carrier" }, { value: "Screening provider", label: "Screening provider" }]} /></label></div>{connection.isError ? <p className="form-error">{(connection.error as Error).message}</p> : null}<div className="form-panel__actions"><Button type="submit" variant="primary" disabled={connection.isPending}>{connection.isPending ? "Menyimpan…" : "Tambah connection"}</Button></div></form>
       <form className="form-panel" onSubmit={(event) => { event.preventDefault(); serviceAccount.mutate(); }}><div className="form-panel__heading"><h2>Partner API access</h2><p>Service token ditampilkan sekali untuk disimpan langsung pada sistem partner.</p></div><Input label="Nama service account" required value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Inbound partner" />{token ? <StateNotice title="Simpan service token sekarang" tone="warning" action={<Button type="button" variant="secondary" size="sm" icon={Copy} onClick={copyToken}>{tokenCopied ? "Tersalin" : "Salin"}</Button>}>Token ini hanya ditampilkan sekali dan tidak dapat dipulihkan dari GateGuard setelah halaman ditutup.<span className="cf-one-time-token mono">{token}</span></StateNotice> : null}{serviceAccount.isError ? <p className="form-error">{(serviceAccount.error as Error).message}</p> : null}<div className="form-panel__actions"><Button type="submit" variant="primary" disabled={serviceAccount.isPending}>{serviceAccount.isPending ? "Membuat…" : "Buat service token"}</Button></div></form>
     </section>
+    </>}
   </div>;
 }
