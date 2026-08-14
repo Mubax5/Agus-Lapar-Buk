@@ -47,7 +47,7 @@ def test_operator_cannot_override():
         mismatches=[],
         audit=AuditState(system_decision=ReconciliationStatus.HOLD),
     )
-    repository.save(result)
+    repository.save(result, organization_id="test-workspace")
     token = create_session(repository, user.id, get_settings())
     client = TestClient(app)
     client.cookies.set("gateguard_session", token)
@@ -98,3 +98,46 @@ def test_admin_cannot_promote_user_to_administrator():
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "ADMIN_ROLE_RESERVED"
+
+
+def test_workspace_membership_role_controls_authorization():
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app.api.operations import get_operations
+    from app.api.routes import get_repository
+    from app.repositories.operations import OrganizationRow, WorkspaceMembershipRow
+
+    repository = get_repository()
+    operations = get_operations()
+    with operations.session_factory() as session:
+        workspace = session.scalar(
+            select(OrganizationRow).where(OrganizationRow.code == "DEFAULT")
+        )
+    assert workspace is not None
+    workspace_id = workspace.id
+    user = repository.create_user(
+        email="global-admin-workspace-operator@example.com",
+        display_name="Workspace Operator",
+        password_hash=hash_password("a secure password"),
+        role="admin",
+        organization_id=workspace_id,
+    )
+    with operations.session_factory() as session:
+        membership = session.scalar(
+            select(WorkspaceMembershipRow).where(
+                WorkspaceMembershipRow.organization_id == workspace_id,
+                WorkspaceMembershipRow.user_id == user.id,
+            )
+        )
+        assert membership is not None
+        membership.role = "operator"
+        session.commit()
+
+    token = create_session(repository, user.id, get_settings())
+    client = TestClient(app)
+    client.cookies.set("gateguard_session", token)
+    response = client.get("/api/users")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"

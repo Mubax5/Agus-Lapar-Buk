@@ -6,26 +6,58 @@ import { PlusIcon as Plus, UsersThreeIcon as UsersThree } from "@phosphor-icons/
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DataTableSurface, EmptyState } from "@/components/ui/page-primitives";
+import { ContextRail, KeyValueList, MetricCell, RailSection, StateNotice } from "@/components/ui/operational-primitives";
 import { PageHeader } from "@/components/ui/page-header";
 import { AppSelect } from "@/components/ui/select";
+import { Input } from "@cloudflare/kumo/components/input";
 import { isAdministrator } from "@/lib/access";
 import { createUser, fetchMe, fetchUsers, updateUser } from "@/lib/api";
+import { useSettingsCopy } from "@/components/settings/settings-copy";
 
 export default function PeoplePage() {
+  const { language, t } = useSettingsCopy();
   const client = useQueryClient();
   const currentUser = useQuery({ queryKey: ["auth", "me"], queryFn: fetchMe, retry: false });
   const canManagePeople = isAdministrator(currentUser.data?.role);
   const result = useQuery({ queryKey: ["users"], queryFn: fetchUsers, enabled: canManagePeople });
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ display_name: "", email: "", password: "", role: "operator" });
-  const mutation = useMutation({ mutationFn: () => createUser(form), onSuccess: () => { setOpen(false); setForm({ display_name: "", email: "", password: "", role: "operator" }); client.invalidateQueries({ queryKey: ["users"] }); } });
+  const mutation = useMutation({
+    mutationFn: () => createUser(form),
+    onSuccess: () => {
+      setOpen(false);
+      setForm({ display_name: "", email: "", password: "", role: "operator" });
+      client.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+
   if (currentUser.isPending) return <main className="grid min-h-screen place-items-center text-sm text-[var(--subtle)]">Memuat sesi GateGuard…</main>;
-  if (!canManagePeople) return <div role="alert" className="notice notice--danger">People and access is only available to administrators.</div>;
+  if (!canManagePeople) return <div role="alert" className="notice notice--danger">{t.administratorsOnly}</div>;
 
   const users = result.data || [];
   const active = users.filter((item) => item.active);
   const operators = users.filter((item) => item.role === "operator");
   const reviewers = users.filter((item) => item.role === "supervisor");
   const admins = users.filter((item) => item.role === "admin");
-  return <div className="operations-page"><PageHeader icon={UsersThree} title="People and access" description="Manage who can prepare, review, approve, and administer shipment decisions." actions={<Button icon={Plus} onClick={() => setOpen(true)}>Add person</Button>} /><section className="metric-grid metric-grid--four"><div className="metric-cell"><span>Active users</span><strong>{active.length}</strong><small>Can sign in now</small></div><div className="metric-cell"><span>Operators</span><strong>{operators.length}</strong><small>Prepare shipment work</small></div><div className="metric-cell"><span>Reviewers</span><strong>{reviewers.length}</strong><small>Review and decide</small></div><div className="metric-cell"><span>Administrators</span><strong>{admins.length}</strong><small>Manage workspace access</small></div></section><section className="data-panel data-panel--wide"><div className="data-panel__header"><div><h2>Workspace people</h2><p>Access changes are recorded in the Activity log.</p></div></div><div className="table-scroll"><Table><Table.Header sticky><Table.Row><Table.Head>Person</Table.Head><Table.Head>Role</Table.Head><Table.Head>Status</Table.Head><Table.Head>Last login</Table.Head><Table.Head>Action</Table.Head></Table.Row></Table.Header><Table.Body>{users.map((item) => <Table.Row key={item.id}><Table.Cell><strong>{item.display_name}</strong><small>{item.email}</small></Table.Cell><Table.Cell>{item.role === "supervisor" ? "Reviewer" : item.role === "admin" ? "Administrator" : "Operator"}</Table.Cell><Table.Cell>{item.active ? "Active" : "Disabled"}</Table.Cell><Table.Cell>{item.last_login_at ? new Date(item.last_login_at).toLocaleString("en-GB") : "Never"}</Table.Cell><Table.Cell><Button size="sm" variant="secondary" disabled={item.role === "admin" && admins.length === 1} onClick={() => updateUser(item.id, { active: !item.active }).then(() => client.invalidateQueries({ queryKey: ["users"] }))}>{item.active ? "Deactivate" : "Reactivate"}</Button></Table.Cell></Table.Row>)}</Table.Body></Table></div>{!users.length && <div className="empty-state"><strong>No people yet</strong><span>Add an operator or reviewer to begin.</span></div>}</section><DialogRoot open={open} onOpenChange={setOpen}><Dialog className="person-dialog"><Dialog.Title>Add person</Dialog.Title><Dialog.Description>Create an account with a temporary password. The person must change it after first sign-in.</Dialog.Description><form className="dialog-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Display name<input required value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} /></label><label>Email<input required type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label>Temporary password<input required minLength={12} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label><label>Role<AppSelect ariaLabel="Role" value={form.role} onValueChange={(role) => setForm({ ...form, role })} options={[{ value: "operator", label: "Operator" }, { value: "supervisor", label: "Reviewer" }]} /></label>{mutation.isError && <p role="alert" className="form-error">{(mutation.error as Error).message}</p>}<div className="form-panel__actions"><Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Adding…" : "Add person"}</Button></div></form></Dialog></DialogRoot></div>;
+
+  return (
+    <div className="operations-page cf-people-page">
+      <PageHeader icon={UsersThree} title={t.peopleAndAccess} description="Membership untuk workspace aktif. Halaman ini tidak membuka global user management lintas tenant." actions={<Button icon={Plus} onClick={() => setOpen(true)}>{t.addPerson}</Button>} />
+      <StateNotice title="Batas akses workspace" tone="info">Administrator workspace dapat menambahkan Operator atau Reviewer. Role Administrator tidak dapat dibuat dari halaman ini, dan administrator terakhir tidak dapat dinonaktifkan.</StateNotice>
+      <section className="metric-grid metric-grid--four" aria-label={t.peopleAndAccess}>
+        <MetricCell label={t.activeUsers} value={active.length} detail={t.canSignInNow} />
+        <MetricCell label={t.operators} value={operators.length} detail={t.prepareShipmentWork} />
+        <MetricCell label={t.reviewers} value={reviewers.length} detail={t.reviewAndDecide} />
+        <MetricCell label={t.administrators} value={admins.length} detail={t.manageWorkspaceAccess} />
+      </section>
+      <div className="cf-integration-layout">
+        <DataTableSurface title={t.workspacePeople} description={t.accessChangesLogged}>
+          {result.isLoading ? <div className="cf-table-loading">Memuat anggota workspace…</div> : !users.length ? <EmptyState icon={<UsersThree size={18} />} title={t.noPeopleYet} description={t.addOperatorReviewer} /> : <div className="table-scroll"><Table><Table.Header sticky><Table.Row><Table.Head>{t.person}</Table.Head><Table.Head>{t.role}</Table.Head><Table.Head>{t.status}</Table.Head><Table.Head>{t.lastLogin}</Table.Head><Table.Head>{t.action}</Table.Head></Table.Row></Table.Header><Table.Body>{users.map((item) => <Table.Row key={item.id}><Table.Cell><span className="table-cell-primary">{item.display_name}</span><br /><span className="cf-metadata">{item.email}</span></Table.Cell><Table.Cell>{item.role === "supervisor" ? "Reviewer" : item.role === "admin" ? "Administrator" : "Operator"}</Table.Cell><Table.Cell>{item.active ? t.active : t.disabled}</Table.Cell><Table.Cell><span className="cf-table-date">{item.last_login_at ? new Date(item.last_login_at).toLocaleString(language === "id" ? "id-ID" : "en-GB") : t.never}</span></Table.Cell><Table.Cell><Button size="sm" variant="secondary" disabled={item.role === "admin" && admins.length === 1} onClick={() => updateUser(item.id, { active: !item.active }).then(() => client.invalidateQueries({ queryKey: ["users"] }))}>{item.active ? t.deactivate : t.reactivate}</Button></Table.Cell></Table.Row>)}</Table.Body></Table></div>}
+        </DataTableSurface>
+        <ContextRail title="Konteks membership"><RailSection title="Workspace role model"><KeyValueList items={[{ label: "Administrator", value: "Mengelola access workspace" }, { label: "Reviewer", value: "Review dan keputusan operasional" }, { label: "Operator", value: "Menyiapkan pekerjaan pengiriman" }, { label: "Scope", value: "Workspace aktif saja" }]} /></RailSection><p className="cf-rail-muted">Akses ke anggota dari organisasi lain tidak tersedia pada surface ini.</p></ContextRail>
+      </div>
+      <DialogRoot open={open} onOpenChange={setOpen}><Dialog className="person-dialog"><Dialog.Title>{t.addPersonTitle}</Dialog.Title><Dialog.Description>{t.addPersonDescription}</Dialog.Description><form className="dialog-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><Input label={t.displayName} required value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} /><Input label="Email" required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /><Input label={t.temporaryPassword} required minLength={12} type="password" autoComplete="new-password" description={t.temporaryPasswordHint} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /><label>{t.role}<AppSelect ariaLabel={t.role} value={form.role} onValueChange={(role) => setForm({ ...form, role })} options={[{ value: "operator", label: "Operator" }, { value: "supervisor", label: "Reviewer" }]} /></label>{mutation.isError && <p role="alert" className="form-error">{(mutation.error as Error).message}</p>}<div className="form-panel__actions"><Button type="button" variant="secondary" onClick={() => setOpen(false)}>{t.cancel}</Button><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? t.adding : t.addPerson}</Button></div></form></Dialog></DialogRoot>
+    </div>
+  );
 }
