@@ -205,6 +205,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Normalize GHCR image owner
+        id: image-owner
+        run: echo "value=$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -223,8 +227,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/gateguard-backend:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/gateguard-backend:latest
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-backend:${{ github.sha }}
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-backend:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -239,8 +243,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/gateguard-frontend:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/gateguard-frontend:latest
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-frontend:${{ github.sha }}
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-frontend:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
