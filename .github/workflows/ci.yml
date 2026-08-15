@@ -35,9 +35,16 @@ jobs:
         working-directory: backend
         run: uv run ruff check app tests
 
-      - name: Test
+      - name: Test with coverage floor
         working-directory: backend
-        run: uv run pytest --cov=app --cov-report=term-missing
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: uv tool run pip-audit .
+
+      - name: Run Semgrep OSS SAST
+        run: uv tool run semgrep scan --config p/default --error --metrics=off backend/app frontend/app frontend/components frontend/lib
 
       - name: Migration smoke test
         working-directory: backend
@@ -71,6 +78,10 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Audit production npm dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Prepare compose environment
         run: cp .env.example .env
 
@@ -92,44 +103,154 @@ jobs:
           SEED_USER_2_ROLE: operator
         run: docker compose -f docker-compose.prod.yml config
 
+      - name: Validate image-release Compose configuration
+        env:
+          APP_API_KEY: ci-service-key-012345678901234567890123456789
+          APP_PUBLIC_ORIGIN: https://gateguard.example.com
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ci-image-sha
+          POSTGRES_PASSWORD: ci-postgres-password
+          SEED_USER_1_EMAIL: admin@gateguard.local
+          SEED_USER_1_PASSWORD: ci-seed-password-1
+          SEED_USER_1_DISPLAY_NAME: GateGuard Admin
+          SEED_USER_1_ROLE: admin
+          SEED_USER_2_EMAIL: operator@gateguard.local
+          SEED_USER_2_PASSWORD: ci-seed-password-2
+          SEED_USER_2_DISPLAY_NAME: GateGuard Operator
+          SEED_USER_2_ROLE: operator
+        run: docker compose -f docker-compose.prod.yml -f docker-compose.prod.images.yml config
+
       - name: Remove temporary compose environment
         if: always()
         run: rm -f .env
 
-      - name: Deploy production to VPS
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+  supply-chain-security:
+    name: Supply-chain security
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan tracked secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/gateguard_deploy"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/gateguard_deploy" "$HOME/.ssh/known_hosts"
-          ssh -i "$HOME/.ssh/gateguard_deploy" \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
-          set -euo pipefail
-          cd /opt/gateguard
-          git fetch --prune origin main
-          git checkout --force main
-          git reset --hard origin/main
-          docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          for attempt in $(seq 1 36); do
-            if [ "$(docker inspect --format '{{.State.Health.Status}}' gateguard-postgres-1 2>/dev/null)" = healthy ] \
-              && [ "$(docker inspect --format '{{.State.Health.Status}}' gateguard-backend-1 2>/dev/null)" = healthy ] \
-              && curl -fsS http://127.0.0.1:3000/ >/dev/null; then
-              echo "GateGuard deployment is healthy."
-              exit 0
-            fi
-            sleep 5
-          done
+      - name: Scan repository vulnerabilities and IaC with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
-          docker compose -f docker-compose.prod.yml ps
-          docker compose -f docker-compose.prod.yml logs --tail=80
-          exit 1
-          REMOTE
+      - name: Generate source SBOM artifact
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          artifact-name: gateguard-source-sbom
+          output-file: gateguard-source.spdx.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image for vulnerability scan
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          load: true
+          tags: gateguard-backend:ci
+
+      - name: Scan backend container image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: gateguard-backend:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: '1'
+          skip-setup-trivy: true
+
+      - name: Build frontend image for vulnerability scan
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          load: true
+          tags: gateguard-frontend:ci
+
+      - name: Scan frontend container image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: gateguard-frontend:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: '1'
+          skip-setup-trivy: true
+
+  publish-production-images:
+    name: Publish production images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify, supply-chain-security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Normalize GHCR image owner
+        id: image-owner
+        run: echo "value=$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-backend:${{ github.sha }}
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-backend:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and publish frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-frontend:${{ github.sha }}
+            ghcr.io/${{ steps.image-owner.outputs.value }}/gateguard-frontend:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
